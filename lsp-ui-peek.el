@@ -515,7 +515,8 @@ XREFS is a list of references/definitions."
                 (pop-to-buffer (marker-buffer marker) t)
               (switch-to-buffer (marker-buffer marker)))
             (with-current-buffer buffer
-              (lsp-ui-peek-mode -1))
+              (lsp-ui-peek-mode -1)
+              (push-mark))
             (unless lsp--buffer-workspaces
               (setq lsp--buffer-workspaces cur-buffer-workspaces)
               (lsp-mode 1)

@@ -198,10 +198,18 @@ will cause performances issues.")
      (add-text-properties 0 (length obj) ,prop obj)
      obj))
 
-(defun lsp-ui-peek--truncate (len s)
-  (if (> (string-width s) len)
-      (concat (truncate-string-to-width s (max (- len 2) 0)) "..")
-    s))
+(defun lsp-ui-peek--truncate (len s &optional start)
+  (let* ((start (or start 0))
+         (end (+ start len))
+         (margin (+ (if (> start 0) 2 0)
+                    (if (> (string-width s) end) 2 0)))
+         parts)
+    (when (> (string-width s) end)
+      (push ".." parts))
+    (push (truncate-string-to-width s (max (- end margin) 0) start) parts)
+    (when (> start 0)
+      (push "$" parts))
+    (string-join parts)))
 
 (defun lsp-ui-peek--get-text-selection (&optional n)
   (nth (or n lsp-ui-peek--selection)
@@ -239,10 +247,10 @@ will cause performances issues.")
      (propertize "_" 'face face-right 'display `(space :align-to (- right-fringe 1)))
      (propertize "\n" 'face face-right))))
 
-(defun lsp-ui-peek--adjust (width strings)
+(defun lsp-ui-peek--adjust (width strings left-offset)
   (-let* (((s1 . s2) strings))
-    (cons (lsp-ui-peek--truncate (- width (1+ lsp-ui-peek-list-width)) s1)
-          (lsp-ui-peek--truncate (- lsp-ui-peek-list-width 2) s2))))
+    (cons (lsp-ui-peek--truncate (- width (1+ lsp-ui-peek-list-width)) s1 left-offset)
+          (lsp-ui-peek--truncate (- lsp-ui-peek-list-width 3) s2))))
 
 (defun lsp-ui-peek--make-footer ()
   ;; Character-only terminals don't support characters of different height
@@ -260,13 +268,13 @@ will cause performances issues.")
       (propertize "\n" 'face '(:height 1))
       (propertize "\n" 'face '(:height 0.5))))))
 
-(defun lsp-ui-peek--peek-new (src1 src2)
+(defun lsp-ui-peek--peek-new (src1 src2 left-offset)
   (-let* ((win-width (- (window-text-width)
                         (if (bound-and-true-p display-line-numbers-mode)
                             (+ 2 (line-number-display-width))
                           0)))
           (string (-some--> (-zip-fill "" src1 src2)
-                    (--map (lsp-ui-peek--adjust win-width it) it)
+                    (--map (lsp-ui-peek--adjust win-width it left-offset) it)
                     (-map-indexed 'lsp-ui-peek--make-line it)
                     (-concat it (lsp-ui-peek--make-footer))))
           (next-line (line-beginning-position 2))
@@ -351,14 +359,16 @@ XREFS is a list of references/definitions."
 (defun lsp-ui-peek--peek ()
   "Show reference's chunk of code."
   (-let* ((xref (lsp-ui-peek--get-selection))
-          ((&plist :file file :chunk chunk) (or xref lsp-ui-peek--last-xref))
+          ((&plist :file file :chunk chunk
+                   :line-offset view-offset :col-offset view-col-offset)
+           (or xref lsp-ui-peek--last-xref))
           (header (concat " " (lsp-ui--workspace-path file) "\n"))
           (header2 (format " %s %s" lsp-ui-peek--size-list
                            (string-remove-prefix "workspace/" (string-remove-prefix "textDocument/" lsp-ui-peek--method))))
-          (ref-view (--> chunk
-                         (subst-char-in-string ?\t ?\s it)
-                         (concat header it)
-                         (split-string it "\n")))
+          (ref-view (->> (split-string (subst-char-in-string ?\t ?\s chunk) "\n")
+                         (-drop view-offset)
+                         (-take (1- lsp-ui-peek-peek-height))
+                         (-concat (list header))))
           (list-refs (->> lsp-ui-peek--list
                           (--remove (lsp-ui-peek--prop 'lsp-ui-peek-hidden it))
                           (-drop lsp-ui-peek--offset)
@@ -366,7 +376,7 @@ XREFS is a list of references/definitions."
                           (lsp-ui-peek--fill (1- lsp-ui-peek-peek-height))
                           (-concat (list header2)))))
     (setq lsp-ui-peek--last-xref (or xref lsp-ui-peek--last-xref))
-    (lsp-ui-peek--peek-new ref-view list-refs)
+    (lsp-ui-peek--peek-new ref-view list-refs view-col-offset)
     (and (fboundp 'lsp-ui-doc--hide-frame)
          (lsp-ui-doc--hide-frame))))
 
@@ -417,6 +427,34 @@ XREFS is a list of references/definitions."
 
 (defun lsp-ui-peek--select (index)
   (setq lsp-ui-peek--selection (+ lsp-ui-peek--selection index)))
+
+(defun lsp-ui-peek--scroll (delta-v delta-h)
+  (-let* ((xref (or (lsp-ui-peek--get-selection) lsp-ui-peek--last-xref))
+          ((&plist :line-offset cur-v :col-offset cur-h) xref))
+    (when xref
+      (plist-put xref :col-offset (max (+ cur-h delta-h) 0))
+      (plist-put xref :line-offset
+                 (min (max (+ cur-v delta-v)
+                           (- lsp-ui-peek-peek-height)
+                           0)
+                      (1- lsp-ui-peek-peek-height)))
+      (lsp-ui-peek--peek))))
+
+(defun lsp-ui-peek-scroll-up ()
+  (interactive)
+  (lsp-ui-peek--scroll -1 0))
+
+(defun lsp-ui-peek-scroll-down ()
+  (interactive)
+  (lsp-ui-peek--scroll 1 0))
+
+(defun lsp-ui-peek-scroll-left ()
+  (interactive)
+  (lsp-ui-peek--scroll 0 -4))
+
+(defun lsp-ui-peek-scroll-right ()
+  (interactive)
+  (lsp-ui-peek--scroll 0 4))
 
 (defun lsp-ui-peek--select-next (&optional no-update)
   (interactive)
@@ -549,6 +587,10 @@ XREFS is a list of references/definitions."
     (define-key map (kbd "q") 'lsp-ui-peek--abort)
     (define-key map (kbd "RET") 'lsp-ui-peek--goto-xref)
     (define-key map (kbd "M-RET") 'lsp-ui-peek--goto-xref-other-window)
+    (define-key map (kbd "h") 'lsp-ui-peek-scroll-left)
+    (define-key map (kbd "j") 'lsp-ui-peek-scroll-down)
+    (define-key map (kbd "k") 'lsp-ui-peek-scroll-up)
+    (define-key map (kbd "l") 'lsp-ui-peek-scroll-right)
     map)
   "Keymap for ‘lsp-ui-peek-mode’.")
 
@@ -635,8 +677,10 @@ EXTRA is a plist of extra parameters."
 START and END are delimiters."
   (let* ((point (lsp--position-to-point pos))
          (inhibit-field-text-motion t)
-         (line-start (1+ (- 1 (/ lsp-ui-peek-peek-height 2))))
-         (line-end (/ lsp-ui-peek-peek-height 2)))
+         ;; Extract a context that is twice the number of visible lines, to
+         ;; support vertical scrolling:
+         (line-start (1+ (- lsp-ui-peek-peek-height)))
+         (line-end lsp-ui-peek-peek-height))
     (save-excursion
       (goto-char point)
       (let* ((before (buffer-substring (line-beginning-position line-start) (line-beginning-position)))
@@ -677,7 +721,9 @@ LOCATION can be either a LSP Location or SymbolInformation."
           :chunk (or chunk filename)
           :file filename
           :line start-line
-          :column start-col)))
+          :column start-col
+          :line-offset (1+ (/ lsp-ui-peek-peek-height 2))
+          :col-offset 0)))
 
 (defun lsp-ui-peek--fontify-buffer (filename)
   (when (eq lsp-ui-peek-fontify 'always)

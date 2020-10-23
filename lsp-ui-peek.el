@@ -430,31 +430,42 @@ XREFS is a list of references/definitions."
 
 (defun lsp-ui-peek--scroll (delta-v delta-h)
   (-let* ((xref (or (lsp-ui-peek--get-selection) lsp-ui-peek--last-xref))
-          ((&plist :line-offset cur-v :col-offset cur-h) xref))
-    (when xref
-      (plist-put xref :col-offset (max (+ cur-h delta-h) 0))
-      (plist-put xref :line-offset
-                 (min (max (+ cur-v delta-v)
+          ((&plist :line-offset cur-v :col-offset cur-h) xref)
+          (new-h (max (+ cur-h delta-h) 0))
+          (new-v (min (max (+ cur-v delta-v)
                            (- lsp-ui-peek-peek-height)
                            0)
-                      (1- lsp-ui-peek-peek-height)))
+                      (1- lsp-ui-peek-peek-height))))
+    (when (and xref
+               (or (not (= new-h cur-h))
+                   (not (= new-v cur-v))))
+      (plist-put xref :col-offset new-h)
+      (plist-put xref :line-offset new-v)
       (lsp-ui-peek--peek))))
 
-(defun lsp-ui-peek-scroll-up ()
-  (interactive)
-  (lsp-ui-peek--scroll -1 0))
+(defun lsp-ui-peek-scroll-up (lines)
+  (interactive (list (if current-prefix-arg
+                         (prefix-numeric-value current-prefix-arg)
+                       1)))
+  (lsp-ui-peek--scroll (- lines) 0))
 
-(defun lsp-ui-peek-scroll-down ()
-  (interactive)
-  (lsp-ui-peek--scroll 1 0))
+(defun lsp-ui-peek-scroll-down (lines)
+  (interactive (list (if current-prefix-arg
+                         (prefix-numeric-value current-prefix-arg)
+                       1)))
+  (lsp-ui-peek--scroll lines 0))
 
-(defun lsp-ui-peek-scroll-left ()
-  (interactive)
-  (lsp-ui-peek--scroll 0 -4))
+(defun lsp-ui-peek-scroll-left (cols)
+  (interactive (list (if current-prefix-arg
+                         (prefix-numeric-value current-prefix-arg)
+                       4)))
+  (lsp-ui-peek--scroll 0 (- cols)))
 
-(defun lsp-ui-peek-scroll-right ()
-  (interactive)
-  (lsp-ui-peek--scroll 0 4))
+(defun lsp-ui-peek-scroll-right (cols)
+  (interactive (list (if current-prefix-arg
+                         (prefix-numeric-value current-prefix-arg)
+                       4)))
+  (lsp-ui-peek--scroll 0 cols))
 
 (defun lsp-ui-peek--select-next (&optional no-update)
   (interactive)
